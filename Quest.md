@@ -199,6 +199,7 @@ CloudXR、OpenXR 及相关运行环境的部署依赖较多，可直接使用 We
 整体流程可分三个阶段：标定-\>连接-\>启动相对跟随。
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart LR
     N0["标定"]
     N1["连接"]
@@ -207,7 +208,7 @@ flowchart LR
     N1 --> N2
 ```
 
-坐标标定与参数配置：通过桌面三点采样，确定Quset参考坐标系到工作台坐标系的方向旋转，结合机器人实际安装变换及TCP配置，建立手柄运动方向到机器人基座坐标系的转换关系。
+坐标标定与参数配置：需要标定时，在 Quest 网页采集 O、X、Y，通过 HTTPS 提交点位，由本地计算并保存 Quest 到工作台的方向旋转。运行时加载并复核已有标定，结合各臂安装变换和 TCP 配置，换算手柄运动方向。
 
 连接：通过Labs及Quset Web会话，加载标定参数，检查左右手跟踪，通信及机器人状态。
 
@@ -218,8 +219,9 @@ flowchart LR
 (机器人安装标定) 工作台坐标系定义 -\>  机器人安装  -\>  Quest桌面三点标定 -\> 参数保存
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
-    N0["(机器人安装标定) 工作台坐标系定义"]
+    N0["机器人安装标定<br/>定义工作台坐标系"]
     N1["机器人安装"]
     N2["Quest桌面三点标定"]
     N3["参数保存"]
@@ -281,8 +283,8 @@ Quest Browser 打开 Quest 采集页 ->
 获取手柄6Dof位姿及按键信息   				->
 WebSocket传输数据到本地   			->
 Quest ROS 2 Bridge 发布 ROS 2 Topic  		->
-对设备进行标定		   						->
-读取标定信息并设定基准						->
+加载已有方向标定 ->
+复核工位方向
 ```
 
 跟随阶段：
@@ -300,17 +302,18 @@ LABS Leader / Follower 执行 ->
 ```
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
     subgraph PREP["准备阶段："]
         direction TB
         N123["启动labs"]
-        N124["Quest Browser 打开 Quest 采集页"]
+        N124["Quest Browser<br/>打开 Quest 采集页"]
         N125["启动WebXR"]
-        N126["获取手柄6Dof位姿及按键信息"]
-        N127["WebSocket传输数据到本地"]
-        N128["Quest ROS 2 Bridge 发布 ROS 2 Topic"]
-        N129["对设备进行标定"]
-        N130["读取标定信息并设定基准"]
+        N126["获取手柄 6DoF 位姿<br/>和按键数据"]
+        N127["通过 WebSocket<br/>传输到本地"]
+        N128["Quest ROS 2 Bridge<br/>发布 ROS 2 话题"]
+        N129["加载已有方向标定"]
+        N130["复核工位方向"]
         N123 --> N124
         N124 --> N125
         N125 --> N126
@@ -322,10 +325,10 @@ flowchart TD
     subgraph FOLLOW["跟随阶段："]
         direction TB
         N132["按 A 启动遥操作"]
-        N133["长按右手 B，双臂同步到预设位"]
-        N134["确认 FOLLOWING 且双臂实测到位"]
-        N135["按下对应侧 Grip，立即取点"]
-        N136["持续握住 Grip，更新相对 TCP 目标"]
+        N133["长按右手 B<br/>双臂同步到预设位"]
+        N134["确认 FOLLOWING<br/>且双臂实测到位"]
+        N135["按下对应侧 Grip<br/>立即取点"]
+        N136["持续握住 Grip<br/>更新相对 TCP 目标"]
         N137["求解笛卡尔与肘部任务"]
         N138["LABS Leader / Follower"]
         N139["松开对应侧 Grip"]
@@ -338,7 +341,7 @@ flowchart TD
         N137 --> N138
         N138 --> N139
         N139 --> N140
-        N140 -->|停稳且 Follower 就绪后可重按| N135
+        N140 -->|"停稳且 Follower<br/>就绪后可重按"| N135
     end
     N130 --> N132
 ```
@@ -396,6 +399,7 @@ Quest 和 GELLO 共用 LABS 的遥操作状态管理、七关节目标接口和�
 LABS 的 READY → SYNCING → FOLLOWING 用于管理控制器的准备、同步和跟随状态。对于 Quest，确认 FOLLOWING 且实测到位后，按下对应侧 Grip 建立起点，持续握住时驱动对应臂跟随。
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart LR
     N0["READY"]
     N1["SYNCING"]
@@ -463,7 +467,7 @@ $$
 
 控制器按键：Trigger、Grip、摇杆及功能按键。
 
-设备状态：追踪有效性、连接状态及采样时间信息。
+设备状态：每侧追踪是否有效。连接状态和收包时间由本地记录。
 
 (2)WebSocket网络通信：复用 LABS 现有 Web 服务，在 Web 前端增加 Quest 数据采集模块。
 
@@ -497,24 +501,25 @@ ROS2位姿与按键消息处理
 Quest Browser（WebXR）→ WSS → 本地 Quest 服务与 ROS 2 Bridge → 手柄输入话题 → 按下对应侧 Grip 取点 → 持续握持时计算相对 TCP 目标 → 笛卡尔与肘部空间优化 → JointState 关节目标 → LABS Leader → TeleopRobotNode → Follower → ros2\_control → FR3。
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
     N0["Quest3"]
     N0 -->|"(自带空间追踪)"| N1
     N1["Quest Browser"]
     N1 -->|"(WebXR API)"| N2
     N2["Quest WebXR Input"]
-    N2 -->|"(6Dof位姿+按键+追踪状态)"| N3
+    N2 -->|"6DoF 位姿、按键<br/>和追踪状态"| N3
     N3["WSS"]
     N3 --> N4
     N4["本地 quest_teleop 服务"]
     N4 --> N5
     N5["Quest ROS2 Bridge"]
-    N5 -->|"(数据检验) · (坐标轴转换) · (ROS2消息转换)"| N6
+    N5 -->|"数据校验、坐标轴转换<br/>和 ROS 2 消息转换"| N6
     N6["ROS2 Topic"]
     N6 -->|"(pose、joy等)"| N7
-    N7["按下对应侧 Grip 时记录起点"]
+    N7["按下对应侧 Grip<br/>记录起点"]
     N7 --> N8
-    N8["持续握住 Grip 时更新相对 TCP 目标"]
+    N8["持续握住 Grip<br/>更新相对 TCP 目标"]
     N8 --> N9
     N9["笛卡尔与肘部空间优化"]
     N9 --> N10
@@ -802,6 +807,7 @@ Quest 从 LABS 的 Leader 话题接入。quest\_teleop 读取对应 FR3 的实�
 Quest 3 → WebXR → WebSocket → ROS 2 → 标定方向转换和 Grip 取点 → 相对末端目标 → 笛卡尔与肘部空间优化求解七关节目标 → LABS Leader 话题 → TeleopRobotNode 转发 → Follower 话题 → JointFollowerController（关节 PD，输出关节力矩）→ ros2\_control → libfranka / FCI → Franka 控制箱 → FR3 机械臂。
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
     N0["Quest 3"]
     N1["WebXR"]
@@ -809,11 +815,11 @@ flowchart TD
     N3["ROS 2"]
     N4["标定方向转换和 Grip 取点"]
     N5["相对末端目标"]
-    N6["笛卡尔与肘部空间优化求解七关节目标"]
+    N6["笛卡尔与肘部空间优化<br/>求出七关节目标"]
     N7["LABS Leader 话题"]
     N8["TeleopRobotNode 转发"]
     N9["Follower 话题"]
-    N10["JointFollowerController（关节 PD，输出关节力矩）"]
+    N10["JointFollowerController<br/>关节 PD 输出力矩"]
     N11["ros2_control"]
     N12["libfranka / FCI"]
     N13["Franka 控制箱"]
@@ -839,17 +845,18 @@ flowchart TD
 LABS 启动 → Quest 连接并加载标定参数 → 按 A 进入 READY → 长按 B 同步到各臂预设位 → 实测确认到位 → 按下对应侧 Grip 取点 → 持续握住时跟随 → 松开暂停该侧。LABS 处于 FOLLOWING 时用 X 开始或结束录制，结束后通过按键或 LABS Web 审核。
 
 ```mermaid
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
     N0["LABS 启动"]
     N1["Quest 连接"]
     N2["加载标定参数"]
     N3["按 A 进入 READY"]
     N4["长按 B 同步到各臂预设位"]
-    Arrived["进入 FOLLOWING 并确认实测到位"]
-    N5["按下对应侧 Grip 取点，持续握住时跟随"]
+    Arrived["进入 FOLLOWING<br/>确认实测到位"]
+    N5["按下对应侧 Grip 取点<br/>持续握住时跟随"]
     N6["按 X 开始或结束录制"]
-    N7["松开 Grip 暂停该臂并清除起点"]
-    N8["录制结束后用按键或 LABS Web 审核"]
+    N7["松开 Grip<br/>暂停该臂并清除起点"]
+    N8["录制结束后<br/>用按键或 LABS Web 审核"]
     N0 --> N1
     N1 --> N2
     N2 --> N3
