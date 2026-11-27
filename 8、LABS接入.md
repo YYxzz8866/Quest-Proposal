@@ -3,46 +3,64 @@
 ## 8.1 仓库与服务组织
 
 Quest 的采集输入、标定、映射和求解放在独立 `quest_teleop` 仓库。LABS 负责服务构建、工位配置、控制器生命周期和录制。目录按现有输入服务的组织方式新增。
+
 | 位置 | 开发内容 |
 | --- | --- |
 | `services/input/franka-quest/src/third_party/quest_teleop` | Quest 开发代码的子模块位置 |
 | `services/input/franka-quest/` | 新增 Dockerfile、启动脚本和服务 Compose 配置 |
-| `deployments/fr3_duo_quest/` | 计划新增的 Quest 双臂部署目录，放配置、运行参数、Tilt 与生产 Compose 入口 |
+| `deployments/fr3_duo_example/` | 在现有 FR3 双臂工位增加 `LEADER_TYPE` 和 `config_quest.yml`，将 Quest 服务接入 Taskfile、Tilt 和 Compose |
 
 Quest Bridge 和跟随程序在同一本地服务进程内共享校验后的整帧。求解和周期发布使用独立于网络收包及 LABS API 请求的执行循环，避免某个接口等待时阻塞手柄数据或关节目标更新。
 
 ### 子模块与服务构建
 
-1. **在 `quest_teleop` 开发程序。** 本地用 Python 和 `rclpy`，把 Bridge、遥操作状态机、LABS 客户端、跟随循环和关节目标发布作为同一服务内的模块。手柄整帧在服务内传递，LABS 通过 ROS 2 接收关节目标，不直接读取手柄数据。
-2. **在 LABS 封装服务。** 由 Dockerfile 安装目标 ROS 2 发行版对应的依赖并构建 Quest 软件包。启动脚本加载 ROS 2 环境，读取挂载的站点配置和 `calibration.yaml`，再用 `exec` 启动 Quest 进程，使容器停止信号能传给程序。WSS 证书和私钥运行时挂载，初始化关节角及工位参数由配置提供。
-3. **在站点接入服务。** 将 Quest 服务加入开发用 Tilt、站点 Compose 和生产构建入口。开发和生产使用相同的服务入口及配置字段。每次更新 Quest 功能，先提交到 `quest_teleop`，再更新 LABS 记录的子模块提交，便于按版本重建镜像。
+1. **在 `quest_teleop` 开发程序。** 本地用 Python 和 `rclpy`，把 Bridge、遥操作状态机、LABS 客户端、跟随循环和目标发布放在同一服务中。手柄整帧在服务内传递，关节和夹爪目标通过 ROS 2 发给 LABS。
+2. **在 LABS 封装服务。** 用 Dockerfile 安装 FR3 部署所需的 ROS 2 依赖并构建 Quest 软件包。启动脚本加载 ROS 2 环境，读取挂载的 `config_quest.yml` 和 `calibration.yaml`，再用 `exec` 启动 Quest 进程。WSS 证书和私钥在运行时挂载。
+3. **接入工位启动流程。** 工位 Taskfile 从 `.env` 读取 `LEADER_TYPE`，按所选输入构建 `franka-gello` 或 `franka-quest`。开发环境由 Tilt 启动，生产环境由 Compose 启动，两种环境都只启动选中的输入服务。`quest_teleop` 的版本由 LABS 记录的子模块提交确定。
 
 ## 8.2 双臂与运行配置
 
-1. **配置入口。** 为现有 FR3 双臂部署新增 Quest 部署。配置文件中列明两侧命名空间、FR3 模型、关节顺序、目标入口、反馈来源和工具 TCP。在左右命名空间下，将 `leader/quest/joint_states` 设为目标入口，订阅 `franka_robot_state_broadcaster/measured_joint_states` 读取实测反馈。目标和反馈均用 `sensor_msgs/msg/JointState`。
-2. **选择唯一目标源。** Quest 部署启用 Quest Leader 路由。GELLO 部署使用原路由。每个运行站点每侧只将一个控制源转发到 Follower。用独立部署配置区分两种控制源，启动时检查匹配关系。
-3. **对齐控制和录制出口。** Quest 站点的 LABS 转发、FR3 控制器订阅和 MCAP 目标录制统一使用对应侧的 `follower/quest/joint_states`。核对录制的关节顺序及反馈。
+1. **选择输入。** FR3 双臂使用同一份工位配置。在工位 `.env` 中设置 `LEADER_TYPE=gello` 或 `LEADER_TYPE=quest`。未设置时使用 GELLO，其他值在启动前报错。`ROBOT_TYPE` 用于选择机器人型号，`ROS2_VERSION` 用于选择 ROS 版本。
+2. **选择 Leader 话题。** LABS 根据 `LEADER_TYPE` 订阅左右臂和夹爪的输入，每侧只转发当前选中的一套 Leader 目标。
+3. **共用控制和录制出口。** 机械臂目标转发到同侧已有的 `follower/gello/joint_states`，夹爪目标转发到同侧的 `follower/gripper/gripper_client/target_gripper_width_percent`。两个地址在切换输入时固定使用，FR3、Robotiq、Data Recorder 和 GR00T 的 `action` 映射都沿用现有配置。
 
 ### 硬件配置与路由实现
 
-从现有 FR3 双臂配置新增 Quest 部署，分别配置 `left_arm`、`right_arm` 的命名空间、Leader 入口与实测反馈来源。每侧的链路是：**Quest 发布到 `leader/quest/joint_states` → LABS 转发到 `follower/quest/joint_states` → 同侧 FR3 Follower 执行**。以下修改只用于 Quest 配置，GELLO 不变。
+在现有 `deployments/fr3_duo_example/` 增加输入选择。左右臂和夹爪按各自的 `left`、`right` 命名空间解析话题。
 
-| Quest 配置文件 | 修改项 | 设置 |
-| --- | --- | --- |
-| `config_station.yml` | `left_arm`、`right_arm` 的 `leader_topic` 和 `follower_topic` | 分别设为相对名称 `leader/quest/joint_states` 和 `follower/quest/joint_states`，由已有左右命名空间解析。 |
-| `config_franka_robot.yml` | 两侧控制器的 `target_topic_name` | 均设为相对名称 `follower/quest/joint_states`，与同侧 LABS 转发出口解析为同一个完整话题。 |
-| `config_contract_gr00t.yml` | 左右臂 `action` 的录制目标话题 | 左臂用 `/left/follower/quest/joint_states`，右臂用 `/right/follower/quest/joint_states`。实测关节反馈仍录原有的反馈话题。 |
+| 文件 | 开发内容 |
+| --- | --- |
+| `.env.example`、`Taskfile.yml` | 增加 `LEADER_TYPE=gello` 示例。Taskfile 读取并校验取值，选出需要构建和启动的输入服务。 |
+| `Tiltfile`、`docker-compose.yml` | 按所选输入启用 `leader-gello` 或 `leader-quest` profile，沿用已有的 GPU profile。给 `data-collection` 和 `data-recorder` 的 `environment` 都加上 `LEADER_TYPE: "${LEADER_TYPE:-gello}"`。 |
+| `config_station.yml`、共享配置加载器 `station.py` | 在工位 YAML 中定义 `leader_sources`。加载器读取 `LEADER_TYPE`，为左右臂和夹爪填入对应的 `leader_topic` 和 `leader_device`。只对声明了 `leader_sources` 的工位执行这一步。 |
+| `config_quest.yml` | 配置 Quest 按键、两侧实测关节反馈、关节顺序、TCP、预设位、运动限制和夹爪开口比例。Quest 的输出话题和 `leader_sources.quest` 一致。 |
 
-- **Quest 参数：** 启动时读取启用侧、J1 至 J7 的关节名及初始关节角，同时加载两臂安装变换、工具 TCP、运动限制和标定结果。启动时核对初始关节角的数量、顺序及限位；配置缺失或左右对应关系错误时不放行运动目标。
-- **环境配置：** Gazebo 和真机分别使用独立启动配置，明确控制器、反馈来源和设备连接方式。Gazebo 联调时不启用真机硬件接口。核对 Quest、LABS 和 Follower 的 ROS 2 发现设置及话题 QoS；检查时间戳的组件应使用同一 ROS 时间基准。
-- **联调检查：** LABS 转发节点建立后，用 `ros2 topic info --verbose <话题名>` 核对每侧 Leader/Follower 的发布者、订阅者与 QoS，再核对反馈关节名和顺序。发现 Follower 有第二个目标发布源时，先排除冲突再做同步。
+`config_station.yml` 中新增以下输入配置。容器从环境变量读取选择结果，再由 `StationConfig.from_yaml()` 将所选配置填入 `left_arm`、`right_arm`、`left_gripper` 和 `right_gripper`。
+
+```yaml
+leader_sources:
+  gello:
+    leader_device: franka_gello
+    arm_topic: leader/gello/joint_states
+    gripper_topic: leader/gripper/gripper_client/target_gripper_width_percent
+  quest:
+    leader_device: franka_quest
+    arm_topic: leader/quest/joint_states
+    gripper_topic: leader/quest/gripper/target_gripper_width_percent
+```
+
+- **Quest 参数。** 启动时加载两臂安装变换和标定结果，核对各启用侧的预设关节角数量、顺序及限位。配置齐全且左右对应正确后才允许发送运动目标。
+- **环境配置。** Gazebo 用仿真控制器和仿真反馈，FR3 真机用对应的驱动和实测反馈。核对各服务的 ROS 2 发现设置、话题 QoS 和时间基准。
+- **联调检查。** LABS 建立转发后，用 `ros2 topic info --verbose <话题名>` 核对机械臂和夹爪的发布者、订阅者及左右对应关系。确认 Follower 只有一个目标发布源后再同步。
 
 ## 8.3 服务启动、状态与退出
+
+下面是 `LEADER_TYPE=quest` 时的启动和退出流程。
 
 ```mermaid
 %%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
-    Deploy["加载 Quest 双臂部署配置"]
+    Deploy["读取工位配置<br/>选择 Quest 输入"]
     Labs["启动 LABS Data Collection、<br/>Coordinator 和 FR3"]
     Quest["启动 Quest 输入与求解服务"]
     Inputs{"WSS、双侧反馈和<br/>工位参数就绪？"}
@@ -61,16 +79,16 @@ flowchart TD
     Ready -->|正常退出或异常| Fault --> Stop --> Cleanup
 ```
 
-开发部署在 Tilt 和站点 Compose 中加入 Quest 服务的构建、配置挂载和启动。生产部署加入站点构建清单和 Compose 服务，保证构建产物与运行配置一一对应。日志分别记录 WSS 状态、FR3 反馈、LABS 工作流和目标发布状态。
+启动日志打印实际选中的 Leader 类型。Quest 服务记录 WSS 连接、FR3 反馈、LABS 工作流和目标发布状态，方便确认选中的服务和话题是否对应。
 
 启动后运动输出默认锁定，操作者发起同步后才允许发布同步目标。LABS 进入 `FOLLOWING` 且实测确认到位后，先发布保持目标。对应侧 Grip 按下取点、开始检查通过且仍持续握住时，才发布该侧的相对跟随目标。松开后机器人停止跟随。正常退出先请求并确认 LABS 停止，再释放 ROS 发布者、WSS 连接和工作线程。
 
 ### 启动脚本与退出处理
 
-- **启动服务。** Quest 服务和 LABS 一起启动，开发环境用 `task start`，生产环境用 `task start-prod`。Quest 服务读取工位配置和标定文件，启动手柄接收、机器人反馈订阅和 LABS 状态读取。Quest 浏览器连接后，程序先接收手柄数据，等待操作者开始遥操作。
+- **启动服务。** 在工位 `.env` 中选好 `LEADER_TYPE`，开发环境用 `task start`，生产环境用 `task start-prod`。选中 Quest 时，服务读取 `config_quest.yml` 和标定文件，订阅机器人反馈，读取 LABS 状态，然后等待 Quest 浏览器连接。
 - **开始遥操作。** 按右手 A，LABS 进入 `READY` 并建立 Leader → Follower 转发。确认手柄、关节反馈和转发正常后，长按右手 B，让机械臂移动到各自的预设关节位置。确认到位后，按下哪侧 Grip 就为哪侧取点，持续握住时跟随，松开时暂停该侧。
 - **停止遥操作。** 在允许停止的状态下按右手 A。Quest 取消本轮尚未发出的跟随目标，并调用 LABS 的停止接口，由 LABS 停用控制器并清理转发节点。核对控制器已停用、机械臂已停稳后，本轮遥操作结束。采集服务可以继续运行，等待下一次启动。
-- **关闭服务。** 先结束遥操作并确认机械臂停稳，再用 `task stop` 或 `task stop-prod` 关闭服务。Quest 进程收到退出信号后，关闭 WSS 连接并释放 ROS 2 节点。服务重新启动后，再由操作者按 A 启动、长按 B 同步。
+- **关闭或切换输入。** 先结束遥操作并确认机械臂停稳，再用 `task stop` 或 `task stop-prod` 停止当前部署。确认原输入服务已退出后，修改 `LEADER_TYPE` 并重新启动。再次选择 Quest 时，由操作者按 A 启动、长按 B 同步。
 
 ## 8.4 LABS 接口接入开发
 
@@ -101,7 +119,7 @@ Quest 服务在本地调用 Data Collection 后端。
 2. **结束录制。** 录制中再按一次 X，结束当前 Episode 的录制，等待 LABS 进入 `REVIEWING`。
 3. **审核本轮数据。** 进入 `REVIEWING` 后，按 A 丢弃，按 B 保存为失败，按 X 保存为成功，对应 GELLO 页面上的 `Discard`、`Save as failed` 和 `Save as successful`。
 
-录制文件仍由 LABS Data Recorder 写入 MCAP。它根据工位配置录制两侧 Follower 的关节目标和已配置的 FR3 实测关节反馈。Quest 工位把关节目标换成对应侧的 Quest Follower 话题。
+Data Recorder 根据工位配置，将两侧 Follower 的关节目标、夹爪开口目标和已配置的实测反馈写入 MCAP。GELLO 和 Quest 使用同一组录制话题。切换输入后，核对所选任务、Episode 和两侧目标数据。
 
 ## 8.5 Follower 接入
 
@@ -110,4 +128,4 @@ Quest 服务在本地调用 Data Collection 后端。
 ### Gazebo 仿真及切入机器人
 
 1. **在 Gazebo 跑通 Quest → LABS → Follower。** 用 Quest 手柄完成同步、取点和跟随。在终端查看 TCP 目标位姿、Leader 与 Follower 的关节目标、仿真关节角和控制器输出的关节力矩。核对同侧目标是否一致、两侧是否串接、切入跟随时目标是否连续。在 LABS Web 选好任务，用 X 开始并结束一轮录制，完成审核。核对保存的 Episode 属于该任务，再检查对应的 MCAP 中是否有同侧 Follower 关节目标和 FR3 实测关节反馈。完成一次停发核对，确认下游实际如何处理目标中断。
-2. **接入 FR3。** 切换到机器人配置，先核对已启用侧、反馈来源、控制器状态和现场停止方式，真机力矩以控制器提供的反馈为准。
+2. **接入 FR3。** 切换到机器人配置，先核对已启用侧、反馈来源、控制器状态和现场停止方式，力矩以控制器提供的反馈为准。

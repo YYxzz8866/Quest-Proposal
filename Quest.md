@@ -277,7 +277,7 @@ $$
 准备阶段：
 
 ```text
-启动labs									   ->
+选择 Quest 输入并启动 LABS ->
 Quest Browser 打开 Quest 采集页 ->
 启动WebXR   									->
 获取手柄6Dof位姿及按键信息   				->
@@ -306,7 +306,7 @@ LABS Leader / Follower 执行 ->
 flowchart TD
     subgraph PREP["准备阶段："]
         direction TB
-        N123["启动labs"]
+        N123["选择 Quest 输入<br/>并启动 LABS"]
         N124["Quest Browser<br/>打开 Quest 采集页"]
         N125["启动WebXR"]
         N126["获取手柄 6DoF 位姿<br/>和按键数据"]
@@ -346,7 +346,7 @@ flowchart TD
     N130 --> N132
 ```
 
-(1)系统启动：在本地执行 task start 或 task start-prod，启动 LABS Web、Data Collection、ROS 2 及机器人相关服务。
+(1)系统启动：在现有 FR3 双臂工位的 `.env` 中设置 `LEADER_TYPE=quest`，执行 `task start` 或 `task start-prod`，启动 LABS 和 Quest 输入服务。
 
 在 Quest 3 的浏览器中打开本地 quest\_teleop 提供的采集页。LABS 在本地运行，并通过现有接口接收遥操作和录制请求。
 
@@ -728,7 +728,7 @@ $$
 | Grip 持续握持 | 对应手臂持续相对跟随 | 根据手柄相对于本轮起点的位移和旋转，更新该臂的 TCP 目标。 |
 | Grip 松开 | 暂停对应臂跟随 | 撤销该侧跟随许可并清除起点，执行保持停稳。停稳且 Follower 就绪后，再次按下 Grip 时重新记录起点。 |
 | 左手 X 单击 | 开始、结束数据录制 | 调用 LABS Episode 开始、结束接口 |
-| 左右 Trigger | 夹爪控制 | 对应左右手夹爪控制 |
+| 左右 Trigger | 夹爪控制 | 同侧 Grip 握住时，按压量越大，夹爪越闭合。松开 Grip 后，夹爪保留上一条开合目标。标定模式下，右 Trigger 用于确认点位。 |
 
 grip按下瞬间取点，持续握住时更新目标，松开时暂停该侧、清除起点，并执行经验证的保持或受控停止。
 
@@ -780,7 +780,7 @@ Quest Button Mapper 通过 LABS 现有遥操作接口发出启动、同步和停
 
 ### 7、部署集成：
 
-在现有 LABS 部署配置中接入 Quest 所需服务及配置：
+在现有 `deployments/fr3_duo_example/` 接入 Quest 服务。工位 `.env` 使用 `LEADER_TYPE=gello` 或 `LEADER_TYPE=quest` 选择输入，默认使用 GELLO。Taskfile、Tilt 和 Compose 按所选类型启动对应服务。
 
 Quest WebXR 前端资源。
 
@@ -794,13 +794,13 @@ ROS 2 Topic 和输入源映射。
 
 HTTPS/WSS 配置。
 
-保持现有 task start 和生产环境启动流程。
+Quest 服务启动时加载 `config_quest.yml`、标定结果和 WSS 证书。切换输入前先结束遥操作并确认机械臂停稳，停止当前部署，再修改 `.env` 并重新启动。
 
 ### 8、Franka FR3控制器接入
 
 Quest 从 LABS 的 Leader 话题接入。quest\_teleop 读取对应 FR3 的实测关节状态，对 TCP 目标和肘部参考进行优化并计算七关节目标。按 FR3 的 J1 至 J7 顺序，将关节角以弧度写入 sensor\_msgs/msg/JointState.position，并写入有效时间戳，左右臂分别发布到 /left/leader/quest/joint\_states 和 /right/leader/quest/joint\_states。
 
-在LABS的config\_station.yml中修改左右手臂的leader\_topic配置为：leader/quest/joint\_states，leader\_device配置为franka\_quest,folower\_topic可改为：follower/quest/joint\_states，同步配置 config\_station.yml 的 follower\_topic、\`config\_franka\_robot.yml\` 的 target\_topic\_name，以及 config\_contract\_gr00t.yml 的左右臂 action 话题。夹爪配置也可将gello替换成quest。LABS 根据左右命名空间建立转发，将关节目标送到 config\_franka\_robot.yml 中 target\_topic\_name 指定的话题。FR3 侧用现有 JointFollowerController执行关节同步和跟随。
+LABS 根据 `LEADER_TYPE` 从 `config_station.yml` 选择左右机械臂和夹爪的 Leader 话题。Quest 按侧发布七关节目标和夹爪开口比例。机械臂目标由 LABS 转发到同侧的 `follower/gello/joint_states`，用现有 `JointFollowerController` 同步和跟随。夹爪目标转发到原有 Robotiq Follower 话题。两种输入共用 Follower 地址，MCAP 和数据集继续读取这些话题。
 
 ## 系统数据流：
 
@@ -842,12 +842,12 @@ flowchart TD
 
 ## 操作流程：
 
-LABS 启动 → Quest 连接并加载标定参数 → 按 A 进入 READY → 长按 B 同步到各臂预设位 → 实测确认到位 → 按下对应侧 Grip 取点 → 持续握住时跟随 → 松开暂停该侧。LABS 处于 FOLLOWING 时用 X 开始或结束录制，结束后通过按键或 LABS Web 审核。
+工位设为 `LEADER_TYPE=quest` 并启动 LABS → Quest 连接并加载标定参数 → 按 A 进入 READY → 长按 B 同步到各臂预设位 → 实测确认到位 → 按下对应侧 Grip 取点 → 持续握住时跟随 → 松开暂停该侧。LABS 处于 FOLLOWING 时用 X 开始或结束录制，结束后通过按键或 LABS Web 审核。
 
 ```mermaid
 %%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
-    N0["LABS 启动"]
+    N0["选择 Quest 输入<br/>并启动 LABS"]
     N1["Quest 连接"]
     N2["加载标定参数"]
     N3["按 A 进入 READY"]

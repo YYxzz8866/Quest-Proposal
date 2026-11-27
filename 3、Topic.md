@@ -31,29 +31,31 @@ flowchart TD
 
 ### 3.1.2 ROS 2 话题总表
 
-| 用途 | 左手话题 | 右手话题 | ROS 2 消息类型 | 发布方 → 接收方 | 开发范围 |
+| 用途 | 左侧话题 | 右侧话题 | ROS 2 消息类型 | 发布方 → 接收方 | 开发范围 |
 | --- | --- | --- | --- | --- | --- |
 | 手柄位姿 | `/quest/left/pose` | `/quest/right/pose` | `geometry_msgs/msg/PoseStamped` | Bridge → ROS 2 输入订阅端 | 新增 |
 | 手柄按键和摇杆 | `/quest/left/joy` | `/quest/right/joy` | `sensor_msgs/msg/Joy` | Bridge → ROS 2 输入订阅端 | 新增 |
 | 手柄追踪有效性 | `/quest/left/tracking_valid` | `/quest/right/tracking_valid` | `std_msgs/msg/Bool` | Bridge → ROS 2 输入订阅端 | 新增 |
-| Leader 关节目标 | `/left/leader/quest/joint_states` | `/right/leader/quest/joint_states` | `sensor_msgs/msg/JointState` | Quest 求解模块 → LABS | 新增 |
-| Follower 关节目标 | `/left/follower/quest/joint_states` | `/right/follower/quest/joint_states` | `sensor_msgs/msg/JointState` | LABS → FR3 Follower Controller、MCAP 录制 | 复用控制器与录制 |
+| Quest Leader 关节目标 | `/left/leader/quest/joint_states` | `/right/leader/quest/joint_states` | `sensor_msgs/msg/JointState` | Quest → LABS | 新增 |
+| Quest Leader 夹爪目标 | `/left/leader/quest/gripper/target_gripper_width_percent` | `/right/leader/quest/gripper/target_gripper_width_percent` | `std_msgs/msg/Float32` | Quest → LABS | 新增 |
+| 共用 Follower 关节目标 | `/left/follower/gello/joint_states` | `/right/follower/gello/joint_states` | `sensor_msgs/msg/JointState` | LABS → FR3 Follower、MCAP 录制 | 复用 |
+| 共用 Follower 夹爪目标 | `/left/follower/gripper/gripper_client/target_gripper_width_percent` | `/right/follower/gripper/gripper_client/target_gripper_width_percent` | `std_msgs/msg/Float32` | LABS → Robotiq 夹爪客户端、MCAP 录制 | 复用 |
 | 机器人实测关节状态 | `/left/franka_robot_state_broadcaster/measured_joint_states` | `/right/franka_robot_state_broadcaster/measured_joint_states` | `sensor_msgs/msg/JointState` | FR3 状态广播器 → Quest 跟随与求解 | 复用 |
 
-Quest 双臂部署新增 10 个话题：6 个手柄输入、2 个 Leader 关节目标、2 个 Follower 关节目标。
+Quest 模式新增 10 个话题名，包括 6 个手柄输入、2 个关节 Leader 目标和 2 个夹爪 Leader 目标。Follower 目标和机器人实测反馈使用已有话题。
 
 ### 3.1.3 话题接口约定
 
 - **手柄坐标系。** Bridge 发布手柄在 WebXR `local-floor` 下的位姿，`frame_id` 统一用 `quest_local_floor`。位置用米，姿态按四元数的 `x, y, z, w` 填写。标定和相对映射模块负责转换到机器人坐标系。
 - **时间戳。** Bridge 在本地接收一帧时读取一次 ROS 时钟，同一帧的 `PoseStamped` 和 `Joy` 共用这个 ROS 时间戳。收包超时用本地单调时钟检查。
-- **按键顺序。** 在 Bridge 配置中固定左右手柄的 `Joy.buttons` 和 `Joy.axes` 索引。跟随模块和按键处理模块共用此映射。
+- **按键顺序。** 在 Bridge 配置中固定左右手柄的 `Joy.buttons` 和 `Joy.axes` 索引。Trigger 按压量使用该侧 `Joy.axes` 的约定位置，跟随程序直接读取同一帧中的 Grip 和 Trigger。
 - **关节目标。** 每侧的 `JointState.name` 和 `position` 一一对应，按该臂控制器的 J1 到 J7 顺序填写，位置单位为弧度。`header.stamp` 使用生成目标时的 ROS 时间，运行时与 LABS 和 Follower 使用同一时钟基准。
 
 ## 3.2 Quest WebSocket 通信与 ROS 2 Bridge
 
 ### 3.2.1 WebSocket 连接与数据帧
 
-Quest 网页启动 WebXR 后，通过 WSS `/ws` 连接本地，每条消息只打包 `left` 和 `right`。每侧包含位置、姿态、按键和追踪状态，按需发送摇杆值。读不到手柄位姿时，该侧位姿标为无效。XR 会话结束或参考空间重置时，采集页关闭当前 WSS，恢复追踪后重新连接。
+Quest 网页启动 WebXR 后，通过 WSS `/ws` 连接本地，每条消息只打包 `left` 和 `right`。每侧包含位置、姿态、按键、Trigger 按压量和追踪状态，按需发送摇杆值。读不到手柄位姿时，该侧位姿标为无效。XR 会话结束或参考空间重置时，采集页关闭当前 WSS，恢复追踪后重新连接。
 
 ### 3.2.2 数据校验与 ROS 2 发布
 
@@ -94,15 +96,15 @@ flowchart TD
 
 ### 3.3.2 LABS 话题转发与 Follower 执行
 
-Quest 遥操作站点配置中，将 `left_arm`、`right_arm` 的 `leader_topic` 都设为相对名称 `leader/quest/joint_states`，分别由 `left`、`right` 命名空间解析成完整名称。每侧将 `follower_topic` 和控制器的 `target_topic_name` 都设为 `follower/quest/joint_states`，在各自命名空间内解析为 `/left/follower/quest/joint_states` 或 `/right/follower/quest/joint_states`。MCAP 录制的左右 `action` 目标分别选择对应的完整 Follower 话题，录制 LABS 转发给控制器的关节目标。Quest 站点每侧只启用一条 Quest Leader → Follower 转发；独立的 GELLO 站点保留原路由。
+工位启动时通过 `LEADER_TYPE` 选定 GELLO 或 Quest。启动遥操作后，LABS 为左右臂和夹爪创建 `TeleopRobotNode`，每侧只订阅所选输入的话题，再转发到同侧共用的 Follower 话题。FR3 接收七关节目标，Robotiq 接收夹爪开口比例。
 
 ```mermaid
 %%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false, "useMaxWidth": true, "nodeSpacing": 16, "rankSpacing": 24, "padding": 8}}}%%
 flowchart TD
-    LLeader["左臂 Quest Leader"]
+    LLeader["左臂所选 Leader"]
     LRelay["LABS 左臂控制"]
     LFollower["左臂 Follower"]
-    RLeader["右臂 Quest Leader"]
+    RLeader["右臂所选 Leader"]
     RRelay["LABS 右臂控制"]
     RFollower["右臂 Follower"]
 
@@ -110,7 +112,7 @@ flowchart TD
     RLeader --> RRelay --> RFollower
 ```
 
-启动遥操作时，LABS 按配置创建 `TeleopRobotNode`，订阅 Leader 并转发到 Follower。分别确认左右臂的订阅关系，检查 Follower 收到的关节角顺序和时间戳，再同步、跟随与录制。
+同步前核对左右臂和夹爪的发布与订阅关系，并检查关节目标的顺序和时间戳。录制读取转发后的 Follower 目标和已配置的实测反馈。
 
 ## 3.4 开发
 
@@ -128,17 +130,19 @@ Quest 浏览器打开本地 HTTPS 采集页并启动 WebXR。同一次回调中�
       "position_m": [0.23, 0.91, -0.42],
       "orientation_xyzw": [0.0, 0.0, 0.0, 1.0]
     },
-    "buttons": {"grip": true, "trigger": false, "x": false}
+    "buttons": {"grip": true, "trigger": true, "x": false},
+    "trigger_value": 0.42
   },
   "right": {
     "tracking_valid": false,
     "pose": null,
-    "buttons": {"grip": false, "trigger": true, "a": false, "b": false}
+    "buttons": {"grip": false, "trigger": null, "a": false, "b": false},
+    "trigger_value": null
   }
 }
 ```
 
-位姿和按键分别读取。位姿不可用时填 `pose: null` 和 `tracking_valid: false`。按键读不到时填 `null`，读到松开时填 `false`。摇杆按实际使用需求加到对应侧。位置用米，四元数按 `x, y, z, w` 填写。
+位姿和按键分别读取。位姿不可用时填 `pose: null` 和 `tracking_valid: false`。按键读不到时填 `null`，读到松开时填 `false`。`trigger_value` 的范围为 0～1，读不到时填 `null`。跟随程序用同一帧的 Grip 和 Trigger 按压量控制同侧夹爪。位置用米，四元数按 `x, y, z, w` 填写。
 
 ### 3.4.2 开发模块与输出
 
@@ -146,7 +150,7 @@ Quest 浏览器打开本地 HTTPS 采集页并启动 WebXR。同一次回调中�
 | --- | --- | --- |
 | WebXR 与 WSS 收发 | 同一次回调读取左右手柄并组帧。Python 按侧解析，记录本地接收时间，在终端显示左右手的数据和追踪状态 | 左右手柄数据 |
 | 三点标定 | 网页判断停稳，使用 HTTPS `POST /points` 提交组号、点名和已确认坐标。本地计算方向旋转并保存 | `calibration.yaml` 和方向误差 |
-| ROS 2 与 LABS 接入 | 收发通过后，用 Bridge 将同一帧按侧发布为 ROS 2 输入。跟随程序使用进程内的同帧位姿和按键接入相对映射、求解和控制 | 左右手输入话题和各臂关节目标 |
+| ROS 2 与 LABS 接入 | Bridge 按侧发布手柄输入。跟随程序用同一帧计算关节目标和夹爪开口比例，分别发到对应侧 Leader 话题 | 左右手输入话题、关节和夹爪目标 |
 
 ### 3.4.3 数据流向
 
@@ -163,7 +167,7 @@ flowchart TD
     Local["本地解析左右手数据"]
     Log["收发联调<br/>终端显示位姿、按键<br/>和追踪状态"]
     Bridge["后续接入<br/>发布 ROS 2 输入<br/>并共享手柄数据"]
-    Labs["相对映射与求解<br/>关节目标交给 LABS"]
+    Labs["计算关节和夹爪目标<br/>交给 LABS"]
 
     XR --> Points --> Post --> Fit --> Config
     XR --> Pack --> WSS --> Local --> Log
