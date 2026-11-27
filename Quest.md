@@ -172,7 +172,7 @@ CompStateFilter(功能:对机器人运动目标进行平滑滤波)采用位置�
 
 采用 Meta Quest 3、CloudXR、OpenXR、ROS 2、Python 和 C++，使用VR控制器获取左右手6自由度位姿及按键状态，可支持手部追踪。实现机器人遥操作、坐标系转换、末端目标发布及机器人示教数据采集。
 
-Meta Quest 3 利用原生空间追踪系统获取头显、手柄的位置和姿态，以及扳机、摇杆等按键状态。Quest Browser 通过 CloudXR 的 WebXR 客户端与 Ubuntu 通信；Isaac Teleop 负责 XR 设备数据接入、追踪信息处理及动作重定向；Isaac ROS Teleop 将处理后的数据发布到 ROS 2，供机器人控制器使用。
+Meta Quest 3 利用原生空间追踪系统获取头显、手柄的位置和姿态，以及扳机、摇杆等按键状态。Quest Browser 通过 CloudXR 的 WebXR 客户端与本地通信；Isaac Teleop 负责 XR 设备数据接入、追踪信息处理及动作重定向；Isaac ROS Teleop 将处理后的数据发布到 ROS 2，供机器人控制器使用。
 
 系统输入： Quest 3 获取头显、左右手柄六自由度位姿、按键及摇杆状态，以及可用的手部追踪数据。
 
@@ -211,7 +211,7 @@ flowchart LR
 
 连接：通过Labs及Quset Web会话，加载标定参数，检查左右手跟踪，通信及机器人状态。
 
-跟随：LABS 进入 FOLLOWING 后，按下对应侧 Grip，记录该侧手柄位姿和该臂实测 TCP 位姿。持续握住时跟随，松开后暂停。再次按下 Grip 重新取点。
+跟随：长按右手 B，双臂移到各自的预设关节位置。LABS 进入 FOLLOWING 且实测确认双臂到位后，按下对应侧 Grip，记录该侧手柄位姿和该臂实测 TCP 位姿。持续握住时跟随，松开后暂停。该臂停稳且 Follower 仍就绪时，再次按下 Grip 重新取点。
 
 ### 1、坐标标定与参数配置：
 
@@ -228,7 +228,7 @@ flowchart TD
     N2 --> N3
 ```
 
-(1) 工作台及机器人安装坐标系：以共用底座为基准fr3\_duo\_mount\_origin，原点取左右手臂基座原点的中点，明确原点和 $(+X)$、$(+Y)$、$(+Z)$ 的物理方向。将左右机器人的基座坐标系分别记为$(B_{L})$ 和 $(B_{R})$。根据现场测量，分别获取两台机械臂基座在工作台坐标系下的位置和姿态，并表示为齐次变换矩阵。
+(1) 工作台及机器人安装坐标系：以支架定义的 fr3\_duo\_mount\_origin 为公共基准，按安装模型确认原点和 $(+X)$、$(+Y)$、$(+Z)$ 的物理方向。将左右机器人的基座坐标系分别记为$(B_{L})$ 和 $(B_{R})$。根据双臂安装模型及站点配置，获取两台机械臂基座在公共坐标系下的位置和姿态，并表示为齐次变换矩阵。
 
 $$
 [{}^{W}T_{B_{i}}=\left[\begin{matrix}{}^{W}R_{B_{i}} & {}^{W}p_{B_{i}} \\ 0 & 1\end{matrix}\right],\quad \quad i\in \{L,R\}]
@@ -270,16 +270,16 @@ $$
 
 ### 2、运行阶段：
 
-通过现有Labs控制系统执行机器人控制，左右手臂分别跟随对应侧手柄。各臂单独采集Grip状态和跟随起点。松开 Grip 后，对应臂退出跟随并停止，当手柄grip按下，对应机器人跟随，松开后停止跟随。
+通过 LABS 控制机器人。双臂同步到位后，每侧独立处理 Grip。按下取点，持续握住时跟随，松开则暂停该臂。
 
 准备阶段：
 
 ```text
 启动labs									   ->
-quest browser访问labs web端   			->
+Quest Browser 打开 Quest 采集页 ->
 启动WebXR   									->
 获取手柄6Dof位姿及按键信息   				->
-WebSocket传输数据到Ubuntu系统   			->
+WebSocket传输数据到本地   			->
 Quest ROS 2 Bridge 发布 ROS 2 Topic  		->
 对设备进行标定		   						->
 读取标定信息并设定基准						->
@@ -288,15 +288,15 @@ Quest ROS 2 Bridge 发布 ROS 2 Topic  		->
 跟随阶段：
 
 ```text
-按下A启动遥操作								->
-按b键初始化机器人位姿						->
-确认对应 Follower 已就绪					->
-按下grip建立跟随起点		   				->
-持续按grip，相对位姿映射					->
-机器人IK		   								->
-LABS Leader / Follower				   		->
-松开grip				   						->
-停止跟随										
+按 A 启动遥操作 ->
+长按右手 B，双臂回到各自的预设关节位置 ->
+确认 FOLLOWING 且双臂实测到位 ->
+按下对应侧 Grip，立即取点 ->
+持续握住时更新相对 TCP 目标 ->
+笛卡尔与肘部空间优化求解七关节目标 ->
+LABS Leader / Follower 执行 ->
+松开 Grip，暂停该臂并清除起点 ->
+该臂停稳且 Follower 就绪后，可再次按下 Grip 取点
 ```
 
 ```mermaid
@@ -304,10 +304,10 @@ flowchart TD
     subgraph PREP["准备阶段："]
         direction TB
         N123["启动labs"]
-        N124["quest browser访问labs web端"]
+        N124["Quest Browser 打开 Quest 采集页"]
         N125["启动WebXR"]
         N126["获取手柄6Dof位姿及按键信息"]
-        N127["WebSocket传输数据到Ubuntu系统"]
+        N127["WebSocket传输数据到本地"]
         N128["Quest ROS 2 Bridge 发布 ROS 2 Topic"]
         N129["对设备进行标定"]
         N130["读取标定信息并设定基准"]
@@ -321,15 +321,15 @@ flowchart TD
     end
     subgraph FOLLOW["跟随阶段："]
         direction TB
-        N132["按下A启动遥操作"]
-        N133["按b键初始化机器人位姿"]
-        N134["确认对应 Follower 已就绪"]
-        N135["按下grip建立跟随起点"]
-        N136["持续按grip，相对位姿映射"]
-        N137["机器人IK"]
+        N132["按 A 启动遥操作"]
+        N133["长按右手 B，双臂同步到预设位"]
+        N134["确认 FOLLOWING 且双臂实测到位"]
+        N135["按下对应侧 Grip，立即取点"]
+        N136["持续握住 Grip，更新相对 TCP 目标"]
+        N137["求解笛卡尔与肘部任务"]
         N138["LABS Leader / Follower"]
-        N139["松开grip"]
-        N140["停止跟随"]
+        N139["松开对应侧 Grip"]
+        N140["暂停该臂并清除起点"]
         N132 --> N133
         N133 --> N134
         N134 --> N135
@@ -338,17 +338,18 @@ flowchart TD
         N137 --> N138
         N138 --> N139
         N139 --> N140
+        N140 -->|停稳且 Follower 就绪后可重按| N135
     end
     N130 --> N132
 ```
 
-(1)系统启动：在 Ubuntu 系统中执行 task start 或 task start-prod，启动 LABS Web、Data Collection、ROS 2 及机器人相关服务。
+(1)系统启动：在本地执行 task start 或 task start-prod，启动 LABS Web、Data Collection、ROS 2 及机器人相关服务。
 
-Quest 3 通过 Meta Quest Browser 访问 LABS Web 页面，不需要在 Quest 设备端运行 LABS。通过按键定义启动遥操作和录制数据
+在 Quest 3 的浏览器中打开本地 quest\_teleop 提供的采集页。LABS 在本地运行，并通过现有接口接收遥操作和录制请求。
 
-(2)Quest设备连接：在 LABS Web 页面启动 WebXR 会话，通过 Quest 原生空间追踪功能读取左右手柄的三维位置、四元数姿态和按键状态。
+(2)Quest 设备连接：在 Quest 采集页启动 WebXR 会话，通过原生空间追踪读取左右手柄的三维位置、四元数姿态和按键状态。
 
-通过 WebSocket 将数据传输至 Ubuntu，并由 Quest ROS 2 Bridge 发布对应的 ROS 2 Topic。
+通过 WebSocket 将数据传输至本地，并由 Quest ROS 2 Bridge 发布对应的 ROS 2 Topic。
 
 (3)加载标定参数：加载 Quest 参考坐标系$(Q)$到双臂共用底座坐标系 $(W)$的标定旋转 $({}^{W}R_{Q})$，以及左右机器人基座相对于$(W)$的安装变换$({}^{W}T_{B_{L}})$和$({}^{W}T_{B_{R}})$。同时加载各机器人的TCP定义、关节限位等。
 
@@ -358,19 +359,17 @@ $$
 [{}^{B_{i}}R_{Q}=({}^{W}R_{B_{i}})^{T}{}^{W}R_{Q},\quad \quad i\in \{L,R\}]
 $$
 
-参数加载及检查通过后通过grip定义当前跟随起点。对应手柄 长按Grip 启用跟随后，再根据手柄的相对运动生成 TCP 目标。
+参数加载及检查通过后，等待 B 键同步。确认各臂到位后，才接受 Grip 按下事件并建立对应侧起点。
 
 (4)机器人初始化与位置同步：复用 LABS 现有遥操作状态管理机制。
 
-在 READY 时长按右手 B，锁存各臂当前实测的七关节角，作为同步目标并发出同步请求。收到 FOLLOWING 后，允许通过 Grip 启用相对跟随。
+在 READY 时长按右手 B，将站点配置中各臂预设的七关节角作为同步目标并发出同步请求。LABS 进入 FOLLOWING 且实测关节角确认各臂到位后，等待对应侧 Grip 按下。
 
 机器人利用现有Follower的轨迹同步能力，从当前位置沿受限轨迹运动至该目标。同步中不直接执行手柄连续跟随，先完成机器人初始位置及姿态运动。
 
-B 键发起同步，LABS 确认同步完成后，按 grip记录起点。
+(5)机器人跟随起点记录及相对位姿跟随：同步到位后，按下哪侧 Grip，就在按下瞬间记录该侧手柄位姿和对应机械臂的实测 TCP 位姿。左右侧各自取点。
 
-(5)机器人跟随起点记录及相对位姿跟随：同步完成后，按下grip记录两手柄当前位姿和对应机器人的实测 TCP 位姿，作为相对跟随的起点。等待左右手柄的 Grip 输入。
-
-持续握住 Grip 时，系统计算手柄相对于本次起点的位移和旋转，将其转换到对应机器人基座坐标系，再叠加到起始 TCP 位姿，得到末端目标。通过逆运动学求解七关节目标，检查关节限位、工作空间和目标连续性后，经 LABS Leader → Follower → ros2\_control 执行。
+持续握住 Grip 时，系统计算手柄相对于本次起点的位移和旋转，将其转换到对应机器人基座坐标系，再叠加到起始 TCP 位姿。笛卡尔与肘部空间优化据此计算七关节目标，检查关节限位、工作空间和目标连续性后，经 LABS Leader → Follower → ros2\_control 执行。
 
 松开 Grip 时，系统停止根据手柄运动更新该侧目标，机器人停止跟随，并清除本次跟随起点。
 
@@ -380,7 +379,7 @@ B 键发起同步，LABS 确认同步完成后，按 grip记录起点。
 
 录制状态及后续数据保存用 LABS 现有功能
 
-(7)停止与异常：使用现有的LABS系统停止和状态管理。松开grip后，机器人停止跟随，清除已记录起点。单击grip重新记录起点，再握住 Grip 跟随。若 Follower 已停用，则先恢复至 READY，再执行 B 键同步
+(7)停止与异常：松开 Grip 时暂停该臂并清除起点，按已验证的保持流程停稳。待该臂停稳且 Follower 就绪后，再次按下 Grip 取点并持续握住即可跟随。若发生异常或 Follower 已停用，按 LABS 的停止和恢复流程处理。恢复后按 A 进入 READY、长按 B 同步，到位后重新按 Grip 取点。
 
 ### 3、与gello对应的关系及不同：
 
@@ -390,11 +389,11 @@ Quest 和 GELLO 共用 LABS 的遥操作状态管理、七关节目标接口和�
 | --- | --- | --- |
 | 输入数据 | GELLO 读取关节角，经过零位、方向和装配偏移转换后，提供七关节目标 | WebXR 提供左右手柄的六自由度位姿、按键和追踪状态 |
 | 同步目标 | 使用 GELLO 映射得到的七关节目标完成轨迹同步。 | 保留右手 B 键同步。长按 B 时，机器人运动到初始位姿 |
-| 建立起点 | gello初始位姿绝对映射 | 按下Grip建立两手臂的跟随起点 |
-| 跟随目标 | 持续跟随 GELLO 更新的七关节目标。 | 长按Grip，将手柄相对起点的运动映射为TCP目标，再经IK求解七关节角。 |
+| 建立起点 | gello初始位姿绝对映射 | 按下对应侧 Grip 时记录该侧手柄和实测 TCP 起点 |
+| 跟随目标 | 持续跟随 GELLO 更新的七关节目标。 | 持续握住 Grip，将手柄相对起点的运动映射为 TCP 目标，再通过笛卡尔与肘部空间优化求解七关节目标 |
 | 暂停恢复 | 按 GELLO 现有的遥操作流程处理 | 松开Grip后，机器人停止跟随。停稳且Follower保持就绪时，再次按Grip更新跟随起点 |
 
-LABS 的 READY → SYNCING → FOLLOWING 用于管理控制器的准备、同步和跟随状态。对于 Quest，Follower 报告 FOLLOWING 后，Quest侧按下Grip键建立跟随起点，然后长按Grip驱动机器人跟随。
+LABS 的 READY → SYNCING → FOLLOWING 用于管理控制器的准备、同步和跟随状态。对于 Quest，确认 FOLLOWING 且实测到位后，按下对应侧 Grip 建立起点，持续握住时驱动对应臂跟随。
 
 ```mermaid
 flowchart LR
@@ -405,7 +404,7 @@ flowchart LR
     N1 --> N2
 ```
 
-开发重点为 WebXR 数据输入、ROS 2 Bridge、固定坐标映射、IK适配及 Quest 按键与 LABS 现有控制接口的集成。
+开发重点为 WebXR 数据输入、ROS 2 Bridge、相对位姿映射、笛卡尔与肘部空间优化，以及 Quest 按键与 LABS 现有控制接口的集成。
 
 ### 4、整体控制为与相对映射：
 
@@ -431,13 +430,13 @@ $$
 R_{E,target}(t)=(C_{i}\Delta R_{H}(t)C_{i}^{T})R_{E,0}
 $$
 
-刚启用跟随时，手柄位移为零、相对旋转为单位旋转，目标 TCP 位姿与实测起点一致。长按Grip 时，系统更新对应侧的 TCP 目标。松开 Grip 时，对应臂停止跟随。停稳后再次启用跟随时，重新记录手柄和实测 TCP 位姿
+按下 Grip 取点时，手柄位移为零、相对旋转为单位旋转，首个 TCP 目标与实测起点一致。持续握住 Grip 时，系统更新该侧目标。松开时暂停该臂，停稳后重新按下时记录新的起点。
 
 ## 系统架构：
 
 ### 1、Quest3-\>ros2信息交互：
 
-通过quest设备自带空间追踪功能获取对应的左右手柄6Dof的位姿及按键状态，将数据传给ubuntu系统中的ros2。
+通过quest设备自带空间追踪功能获取对应的左右手柄6Dof的位姿及按键状态，将数据传给本地的ros2。
 
 通过移动Quest左右手柄，Ros2可以接收到对应的三维位置、四元数姿态及按键数据。
 
@@ -468,7 +467,7 @@ $$
 
 (2)WebSocket网络通信：复用 LABS 现有 Web 服务，在 Web 前端增加 Quest 数据采集模块。
 
-通过启动start/start-prod启动labs，Quest Browser访问labs web端，然后Quest采集的数据通过WebSocket发送到Ubuntu的FastAPI后端，使用独立的Quest输入通信接口，与现有的相机的WebSocket分离抽象，避免不同的数据占用。
+通过 task start 或 task start-prod 启动站点服务。Quest Browser 打开 Quest 采集页，经独立的 WSS 接口把手柄数据发给本地 quest\_teleop 服务。相机继续使用现有 LABS 通信接口。
 
 (3)Quest数据转化与Ros2发布：在quest\_teleop中实现Quest ROS2 Bridge，负责接收WebSocket数据并转换为ROS2标准消息。主要处理：
 
@@ -495,7 +494,7 @@ ROS2位姿与按键消息处理
 
 ### 3、数据流向：
 
-Quest3---(自带空间追踪)---\>Quest Browser---(WebXR API)---\>Quest WebXR Input---(6Dof位姿+按键+追踪状态)---\>WebSocket---\>labs FastAPI---\>Quest ROS2 Bridge---(数据检验)---(坐标轴转换)---(ROS2消息转换)---\>ROS2 Topic---(pose、joy等)---\>grip建立起点与手柄位姿映射---\>相对TCP映射---\>Robot IK Adapter---\>JointState目标---\>LABS Teleop / Coordinator ---\>TeleopRobotNode---\> Follower / ros2\_control ---\> Robot motion。
+Quest Browser（WebXR）→ WSS → 本地 Quest 服务与 ROS 2 Bridge → 手柄输入话题 → 按下对应侧 Grip 取点 → 持续握持时计算相对 TCP 目标 → 笛卡尔与肘部空间优化 → JointState 关节目标 → LABS Leader → TeleopRobotNode → Follower → ros2\_control → FR3。
 
 ```mermaid
 flowchart TD
@@ -505,19 +504,19 @@ flowchart TD
     N1 -->|"(WebXR API)"| N2
     N2["Quest WebXR Input"]
     N2 -->|"(6Dof位姿+按键+追踪状态)"| N3
-    N3["WebSocket"]
+    N3["WSS"]
     N3 --> N4
-    N4["labs FastAPI"]
+    N4["本地 quest_teleop 服务"]
     N4 --> N5
     N5["Quest ROS2 Bridge"]
     N5 -->|"(数据检验) · (坐标轴转换) · (ROS2消息转换)"| N6
     N6["ROS2 Topic"]
     N6 -->|"(pose、joy等)"| N7
-    N7["grip建立起点与手柄位姿映射"]
+    N7["按下对应侧 Grip 时记录起点"]
     N7 --> N8
-    N8["相对TCP映射"]
+    N8["持续握住 Grip 时更新相对 TCP 目标"]
     N8 --> N9
-    N9["Robot IK Adapter"]
+    N9["笛卡尔与肘部空间优化"]
     N9 --> N10
     N10["JointState目标"]
     N10 --> N11
@@ -560,20 +559,21 @@ LABS通过 rclpy 实现 ROS 2 节点、Publisher、Subscriber 和 Executor 管�
 
 现有 TeleopRobotNode 支持 JointState、TwistStamped 和 Float32 消息，能够根据配置将 Leader Topic 转发至 Follower Topic。
 
-Quest 的原始六自由度位姿先由独立 Bridge 发布为 ROS 2 位姿消息。后续经过坐标映射及逆运动学，生成符合现有接口的七关节目标数据结构，再接入之前的转发链路。
+Quest 的六自由度位姿由独立 Bridge 发布为 ROS 2 位姿消息。对应侧 Grip 启用跟随时，经相对映射和笛卡尔与肘部空间优化生成七关节目标，再接入 LABS 的转发链路。
 
 ### 3、遥操作同步与跟随功能复用：
 
 LABS 已具有 READY、SYNCING、FOLLOWING 等遥操作状态及对应的控制流程，可参考现有 GELLO 操作方式实现 Quest 遥操作。
 
-GELLO 直接提供七关节目标，Quest通过WebXR 获取手柄的六自由度位姿，经B 键同步完成后，按下grip建立跟随起点，再将手柄的相对运动映射为 TCP 目标，通过 FR3 逆运动学生成七关节目标。两者采用相同的控制逻辑，区别如下：
+GELLO 提供七关节目标。Quest 通过 WebXR 获取手柄的六自由度位姿，同步到位后按对应侧 Grip 取点，持续握住时将手柄的相对运动映射为 TCP 目标，再通过笛卡尔与肘部空间优化生成七关节目标。
 
 | 项目 | GELLO | Quest 3 |
 | --- | --- | --- |
 | 输入数据 | 七关节角度 | 末端六自由度手柄位姿 |
 | 标定内容 | 关节方向、零位、装配偏移 | Quest 到双臂共用底座坐标系的方向标定 |
-| 同步目标 | 映射后的关节目标 | 按下哪侧 Grip，就为哪侧取跟随起点 |
-| 跟随目标 | 连续关节角 | 长按grip的手柄末端位姿对应的关节角 |
+| 同步目标 | 映射后的关节目标 | 各臂预设的七关节角 |
+| 建立跟随起点 | 使用现有 GELLO 映射 | 该侧 Grip 按下时记录手柄和实测 TCP 起点 |
+| 跟随目标 | 连续关节角 | 持续握住 Grip 时，由相对 TCP 和肘部任务求解七关节目标 |
 
 ### 4、Quest中已经有的功能：
 
@@ -599,7 +599,7 @@ Quest 3 原生支持左右 Touch Plus 控制器空间追踪，可以实时获取
 
 输入源及位姿追踪有效性信息。
 
-该功能直接作为机器人遥操作的运动输入，只需要对手柄位姿进行坐标转换、固定映射及IK，可创建机器人末端目标。
+手柄位姿作为遥操作输入。确认同步到位并按 Grip 取点后，通过相对位姿映射生成机器人末端目标。
 
 (3)控制器按键及摇杆输入
 
@@ -613,9 +613,9 @@ A键启动遥操作和停止遥操作
 
 右手 B 长按：启动机器人位置同步（SYNCING）。
 
-对应grip：记录跟随起点。
+对应侧 Grip 按下：在按下瞬间记录该侧跟随起点。
 
-Grip长按：机器人连续跟随。
+持续握住 Grip：对应臂连续跟随。松开时暂停该臂并清除起点。
 
 左手 X：开始、结束数据录制。
 
@@ -635,7 +635,7 @@ Quest 3 通过 WebXR 提供 local、local-floor 等参考坐标空间，能够�
 
 可直接使用 Quest 提供的空间追踪结果，不用自己建立头显与左右手柄之间的定位关系。
 
-但 Quest 的 VR 参考坐标系不等于机器人基座坐标系，因此仍需在 Ubuntu 端配置固定坐标映射，将 Quest 位姿转换为机器人末端目标位姿。
+在本地加载 Quest 到机器人基座的方向旋转，将手柄相对起点的平移与旋转换算至对应的基座坐标系。
 
 停止后再次按下对应侧 Grip 时重新取点。
 
@@ -643,11 +643,11 @@ Quest 3 通过 WebXR 提供 local、local-floor 等参考坐标空间，能够�
 
 Quest 3 内置 Meta Quest Browser，支持 WebXR、WebSocket 等 Web 技术。
 
-可以通过 Quest Browser 访问 Ubuntu 系统中的 LABS Web 页面，直接启动 WebXR 会话并读取设备追踪数据。
+可以通过 Quest Browser 访问本地的 LABS Web 页面，直接启动 WebXR 会话并读取设备追踪数据。
 
-Quest 端负责获取手柄位姿及按键状态，通过 WebSocket 将数据发送至 Ubuntu。
+Quest 端负责获取手柄位姿及按键状态，通过 WebSocket 将数据发送至本地。
 
-Ubuntu 端通过 Quest ROS 2 Bridge 接收并转换数据，发布对应的 ROS 2 Topic。
+本地通过 Quest ROS 2 Bridge 接收并转换数据，发布对应的 ROS 2 Topic。
 
 (7)功能具备表：
 
@@ -674,9 +674,9 @@ Ubuntu 端通过 Quest ROS 2 Bridge 接收并转换数据，发布对应的 ROS 
 | Quest Communication | WebSocket 通信、数据序列化及连接状态管理 | 手柄数据 | WebSocket 消息、连接状态 |
 | Quest ROS Bridge | 数据校验、坐标转换及 ROS 2 发布 | WebSocket 消息 | 左右手柄位姿、按键等topic |
 | 标定参数 | 计算Quest到左右机器人基座的方向变换 | 标定参数 | 机器人左右手的方向变换矩阵、TCP配置、跟随比例 |
-| 遥操作状态管理 | A键启动停止遥操作，B键同步初始位置，Grip记录跟随起点及长按跟随 | 按键、手柄位姿、机器人反馈、控制器状态 | 实际关节角作为同步目标、跟随起点、停止请求 |
+| 遥操作状态管理 | A 启停，长按 B 同步到预设位，Grip 按下取点、持续握持跟随、松开暂停 | 按键、手柄位姿、机器人反馈、控制器状态 | 预设关节角作为同步目标、各侧跟随许可和停止请求 |
 | 相对位姿映射 | 将手柄相对起点的运动转换为 TCP 目标 | 当前手柄位姿、跟随起点、方向变换矩阵和跟随比例 | 机器人对应基座系下的TCP目标 |
-| 运动学适配 | 经FK计算实测TCP，用IK求解跟随关节目标 | 实测关节角、机器人模型、TCP配置和目标位姿 | 实测TCP、七关节JointState目标、求解状态 |
+| 笛卡尔与肘部求解 | 经正运动学计算实测 TCP，根据 TCP 目标和肘部参考求解七关节目标 | 实测关节角、机器人模型、TCP 配置、目标位姿和肘部参考 | 实测 TCP、七关节 JointState 目标、求解状态 |
 | Input Safety | 检测追踪丢失、通信超时和无效目标 | 跟踪状态、连接状态、机器人状态、求解结果 | 正常、异常及原因 |
 
 ### 2、相对位姿映射：
@@ -689,9 +689,9 @@ $$
 
 其中，$({}^{W}R_{Q})$为 Quest 到共用底座的标定旋转，$({}^{W}R_{B_{i}})$为该臂基座相对于共用底座的安装旋转。
 
-A键启动遥操作，B键同步完成后，将单击 grip键并记录起点的时刻记为$(t_{0})$。系统分别记录每条待启用臂所对应的手柄起始位姿 $(p_{H}(t_{0}),R_{H}(t_{0}))$，以及该臂在基座系下的实测 TCP 位姿$(p_{E,0},R_{E,0})$。
+A 键启动遥操作，长按 B 同步并确认到位后，将每侧 Grip 从松开变为按下的时刻记为$(t_{0})$。系统记录该侧的手柄起始位姿 $(p_{H}(t_{0}),R_{H}(t_{0}))$，以及该臂在基座系下的实测 TCP 位姿$(p_{E,0},R_{E,0})$。
 
-长按Grip时，检查当前手柄位姿和实测 TCP 位姿相对于记录值的位置然后启动跟随。
+同一次按下 Grip 后持续握住时，使用该侧手柄相对起点的运动连续生成 TCP 目标。
 
 TCP计算目标位置及姿态：
 
@@ -707,7 +707,7 @@ $$
 R_{E,target}(t)=(C_{i}\Delta R_{H}(t)C_{i}^{T})R_{E,0}
 $$
 
-其中，$(s_{i})$为该臂的跟随比例系数。计算得到的 TCP 目标以该臂基座坐标系表示，然后由IK求解七关节目标。
+其中，$(s_{i})$为该臂的跟随比例系数。TCP 目标在该臂基座坐标系中表示，并和按下 Grip 时建立的肘部参考一起用于七关节求解。
 
 刚启动跟随时，目标TCP位姿与实际起点相同，松开grip时，对应手臂退出跟随。再次启动时，重新按下grip键记录手柄及机器人TCP作为新的跟随起点，然后长按跟随。
 
@@ -718,22 +718,22 @@ $$
 | 按键 | 功能 | 对应操作 |
 | --- | --- | --- |
 | 右手 A 单击 | 启动或停止遥操作 | LABS 处于 IDLE 时启动遥操作，进入 READY。停止遥操作按钮可用时，按 A 停止遥操。 |
-| 右手 B 长按 | 启动机器人同步 | LABS 处于 READY 时，运动到定义的初始位置，然后更新FOLLOWER状态 |
-| 左右 Grip 按下 | 建立对应手臂跟随起点 | LABS 处于 FOLLOWING 且对应侧手柄追踪和机器人反馈有效时，在 Grip 按下的瞬间记录该侧手柄位姿和该臂实测 TCP 位姿。 |
-| Grip 持续按下 | 对应手臂开始相对跟随 | 根据手柄相对于本轮起点的位移和旋转，更新该臂的TCP目标 |
-| Grip 松开 | 停止机器人跟随 | 机器人停止跟随之后清除上一阶段建立的起点，该臂停稳且 Follower 就绪后，再次按下 Grip 时重新记录起点 |
+| 右手 B 长按 | 启动机器人同步 | LABS 处于 READY 时，让各臂运动到各自预设的七关节位置，到位后等待 Grip。 |
+| 左右 Grip 按下 | 建立对应手臂跟随起点 | LABS 处于 FOLLOWING、实测确认到位且该侧数据有效时，在 Grip 按下瞬间记录该侧手柄位姿和该臂实测 TCP 位姿。 |
+| Grip 持续握持 | 对应手臂持续相对跟随 | 根据手柄相对于本轮起点的位移和旋转，更新该臂的 TCP 目标。 |
+| Grip 松开 | 暂停对应臂跟随 | 撤销该侧跟随许可并清除起点，执行保持停稳。停稳且 Follower 就绪后，再次按下 Grip 时重新记录起点。 |
 | 左手 X 单击 | 开始、结束数据录制 | 调用 LABS Episode 开始、结束接口 |
 | 左右 Trigger | 夹爪控制 | 对应左右手夹爪控制 |
 
 grip按下瞬间取点，持续握住时更新目标，松开时暂停该侧、清除起点，并执行经验证的保持或受控停止。
 
-对于录制好的数据，可通过电脑的网页版进行对应数据的丢弃和保存。
+待审核的录制可在 LABS Web 操作，也可按 A 丢弃、按 B 保存为失败、按 X 保存为成功。
 
 ### 4、LABS集成开发：
 
 只增加Quest适配，复用web端接口及控制。
 
-(1) web集成：在在现有 data-collection-ui 中增加 Quest 遥操作入口。主要实现：
+(1) Web 集成：Quest 采集页在独立 quest\_teleop 服务中开发。LABS 的 data-collection-ui 沿用现有操作和录制页面。采集页主要实现：
 
 Quest WebXR 会话启动和退出。
 
@@ -745,7 +745,7 @@ Quest 输入数据发送。
 
 同步、跟随和录制状态反馈。
 
-(2)WebSocket后端集成：在现有FastAPI服务中增加Quest的WebSocket接口。
+(2) WebSocket 后端集成：在本地 quest\_teleop 服务中提供 Quest 的 WSS 接口。
 
 负责 Quest 连接管理、数据接收、异常断开检测及与 Quest ROS 2 Bridge 的交互。
 
@@ -753,13 +753,13 @@ Quest 输入数据发送。
 
 ROS 2 Bridge 集成：新增 Quest ROS 2 Bridge，发布 Quest 原始位姿、按键和追踪状态信息。
 
-Coordinator 负责同步和状态切换生成符合 LABS 现有输入数据结构的关节目标。
+Coordinator 负责同步和状态切换。Quest 服务生成七关节同步、保持或跟随目标，按侧发布到 LABS Leader 话题。
 
 ROS 2 Bridge 的创建、停止和资源释放需明确生命周期。
 
 ### 5、遥操作状态控制集成：
 
-Quest Button Mapper 通过 LABS 现有遥操作接口发出同步、跟随和停止请求。
+Quest Button Mapper 通过 LABS 现有遥操作接口发出启动、同步和停止请求。Grip 的按侧取点、跟随和暂停许可由 Quest 本地状态机管理。
 
 检查READY → SYNCING 的实现。SYNCING 完成条件及后续状态转换。FOLLOWING 目标发布许可条件。停止请求及异常停止行为。Follower 接收关节目标的名称、单位、时间戳等信息。
 
@@ -793,13 +793,13 @@ HTTPS/WSS 配置。
 
 ### 8、Franka FR3控制器接入
 
-Quest从LABS的Leader话题接入，独立quest\_teleop节点读取对应的FR3关节的实际关节状态，以当前关节角为IK初值，将映射后的手柄末端目标求解为7个关节角。节点按FR3的1-7关节顺序，将弧度填入sensor\_msgs/msg/JointState.position，并写入有效时间戳，左右臂发布到/left/leader/quest/joint\_states和/right/leader/quest/joint\_states。
+Quest 从 LABS 的 Leader 话题接入。quest\_teleop 读取对应 FR3 的实测关节状态，对 TCP 目标和肘部参考进行优化并计算七关节目标。按 FR3 的 J1 至 J7 顺序，将关节角以弧度写入 sensor\_msgs/msg/JointState.position，并写入有效时间戳，左右臂分别发布到 /left/leader/quest/joint\_states 和 /right/leader/quest/joint\_states。
 
 在LABS的config\_station.yml中修改左右手臂的leader\_topic配置为：leader/quest/joint\_states，leader\_device配置为franka\_quest,folower\_topic可改为：follower/quest/joint\_states，同步配置 config\_station.yml 的 follower\_topic、\`config\_franka\_robot.yml\` 的 target\_topic\_name，以及 config\_contract\_gr00t.yml 的左右臂 action 话题。夹爪配置也可将gello替换成quest。LABS 根据左右命名空间建立转发，将关节目标送到 config\_franka\_robot.yml 中 target\_topic\_name 指定的话题。FR3 侧用现有 JointFollowerController执行关节同步和跟随。
 
 ## 系统数据流：
 
-Quest 3 → WebXR → WebSocket → ROS 2 → 固定坐标映射 → 相对末端目标 → IK 七关节目标 → LABS Leader 话题 → TeleopRobotNode 转发 → Follower 话题→ JointFollowerController（关节 PD，输出关节力矩）→ ros2\_control → libfranka / FCI → Franka 控制箱 → FR3 机械臂。
+Quest 3 → WebXR → WebSocket → ROS 2 → 标定方向转换和 Grip 取点 → 相对末端目标 → 笛卡尔与肘部空间优化求解七关节目标 → LABS Leader 话题 → TeleopRobotNode 转发 → Follower 话题 → JointFollowerController（关节 PD，输出关节力矩）→ ros2\_control → libfranka / FCI → Franka 控制箱 → FR3 机械臂。
 
 ```mermaid
 flowchart TD
@@ -807,9 +807,9 @@ flowchart TD
     N1["WebXR"]
     N2["WebSocket"]
     N3["ROS 2"]
-    N4["固定坐标映射"]
+    N4["标定方向转换和 Grip 取点"]
     N5["相对末端目标"]
-    N6["IK 七关节目标"]
+    N6["笛卡尔与肘部空间优化求解七关节目标"]
     N7["LABS Leader 话题"]
     N8["TeleopRobotNode 转发"]
     N9["Follower 话题"]
@@ -836,30 +836,31 @@ flowchart TD
 
 ## 操作流程：
 
-LABS 启动 → Quest 连接 → 读取固定映射 → A键READY → B 长按同步 → 按下grip瞬间生成跟随起点持续按下grip启动跟随 →X控制数据录制开始停止 →  松开grip停止跟随 → 通过labs的web端进行数据的丢弃和保存。
+LABS 启动 → Quest 连接并加载标定参数 → 按 A 进入 READY → 长按 B 同步到各臂预设位 → 实测确认到位 → 按下对应侧 Grip 取点 → 持续握住时跟随 → 松开暂停该侧。LABS 处于 FOLLOWING 时用 X 开始或结束录制，结束后通过按键或 LABS Web 审核。
 
 ```mermaid
 flowchart TD
     N0["LABS 启动"]
     N1["Quest 连接"]
-    N2["读取固定映射"]
-    N3["A键READY"]
-    N4["B 长按同步"]
-    N5["按下grip瞬间生成跟随起点持续按下grip启动跟随"]
-    N6["X控制数据录制开始停止"]
-    N7["松开grip停止跟随"]
-    N8["通过labs的web端进行数据的丢弃和保存。"]
+    N2["加载标定参数"]
+    N3["按 A 进入 READY"]
+    N4["长按 B 同步到各臂预设位"]
+    Arrived["进入 FOLLOWING 并确认实测到位"]
+    N5["按下对应侧 Grip 取点，持续握住时跟随"]
+    N6["按 X 开始或结束录制"]
+    N7["松开 Grip 暂停该臂并清除起点"]
+    N8["录制结束后用按键或 LABS Web 审核"]
     N0 --> N1
     N1 --> N2
     N2 --> N3
     N3 --> N4
-    N4 --> N5
-    N5 --> N6
-    N6 --> N7
-    N7 --> N8
+    N4 --> Arrived
+    Arrived --> N5 --> N7
+    N7 -->|停稳后重新按下| N5
+    Arrived --> N6 --> N8
 ```
 
-笛卡尔空间+肘部空间优化：替换IK
+笛卡尔与肘部空间优化的详细方案见第 6 章。
 
 对应话题映射：labs中有多少
 
